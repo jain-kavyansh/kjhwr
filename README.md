@@ -129,7 +129,7 @@ python -m pytest -q
 |---|---|
 | `GET /health` | health check |
 | `GET /api/meta` | date range, default cutoff, definitions |
-| `GET /api/forecast?date=&cutoff=` | forecast used at the cutoff for one delivery day, with the P90 band |
+| `GET /api/forecast?date=&cutoff=` | forecast used at the cutoff for one delivery day, with the walk-forward uncertainty band |
 | `GET /api/metrics?start=&end=&cutoff=` | MAE, RMSE, bias, MAPE, percentiles |
 | `GET /api/error-breakdown?by=hour\|day\|horizon` | error breakdowns |
 | `GET /api/actuals?start=&end=` | actual generation |
