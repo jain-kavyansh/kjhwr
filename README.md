@@ -1,6 +1,14 @@
-# Wind forecast portal for day-ahead buying
+# Wind forecast evaluation viewer for day-ahead buying
 
 A web app that helps a UK energy utility's day-ahead buying team (1) see the latest wind forecast available at their decision time and (2) quantify how accurate those forecasts have been. It uses GB national wind data from Elexon BMRS for January 2026 only.
+
+## Scope: what this is and is not
+
+This is a **historical forecast evaluation prototype** for January 2026. It replays the Elexon wind forecasts that were available before each day-ahead cutoff and compares them with actual generation. It is not a live forecast, it does not produce its own forecast, and it does not estimate demand or recommend how much power to buy.
+
+Data provenance (also shown in the app, on the "Data and method" tab): actuals are Elexon FUELHH (fuel type WIND, MW, 30-minute resolution, settlement dates 1 to 31 January 2026); forecasts are Elexon WINDFOR (MW, hourly, published 31 December 2025 to 1 February 2026). A snapshot of both was downloaded once and stored in `backend/data`; `backend/data/snapshot.json` records when. The app serves this snapshot and does not call Elexon live.
+
+Uncertainty band: for delivery day D, the band is the forecast plus the 5th to 95th percentile of the signed error (actual minus forecast) from delivery days up to D-2 only. Its measured coverage on later days is reported in the app. It is an empirical guide, not a validated prediction interval, and one month of data is indicative only.
 
 ## Live app
 
@@ -125,12 +133,13 @@ python -m pytest -q
 | `GET /api/metrics?start=&end=&cutoff=` | MAE, RMSE, bias, MAPE, percentiles |
 | `GET /api/error-breakdown?by=hour\|day\|horizon` | error breakdowns |
 | `GET /api/actuals?start=&end=` | actual generation |
+| `GET /api/band-coverage` | measured hit rate of the walk-forward band |
+| `GET /api/data-quality` | provenance, missing and duplicate checks |
 
 ## Limitations and next steps
 
 - One month of data, so the error statistics are indicative and not stable estimates.
 - The cutoff is a single assumed time, not the exchange's exact gate closure.
-- The P90 band is computed from the same January data it is shown on, so it is descriptive, not a forecast of future error.
 - Possible extensions: live data refresh, demand data to compute the residual purchase need, confidence bands by hour of day, a bias correction.
 
 ## AI tools

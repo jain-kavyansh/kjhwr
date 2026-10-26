@@ -1,3 +1,5 @@
+import json
+import os
 from datetime import date as Date
 from functools import lru_cache
 from typing import Optional
@@ -11,13 +13,26 @@ from . import processing as P
 CUTOFF_RE = r"^([01]\d|2[0-3]):[0-5]\d$"
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 
-app = FastAPI(title="Wind Forecast Portal API")
+app = FastAPI(title="Wind Forecast Evaluation API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 @lru_cache(maxsize=1)
 def raw():
     return P.load_raw()
+
+
+@lru_cache(maxsize=1)
+def quality():
+    return P.quality_report()
+
+
+def snapshot():
+    try:
+        with open(os.path.join(P.DATA_DIR, "snapshot.json")) as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 @lru_cache(maxsize=32)
@@ -58,6 +73,7 @@ def meta():
         "default_cutoff": P.DEFAULT_CUTOFF,
         "timezone": "Europe/London",
         "resolution": "hourly",
+        "mode": "historical evaluation (not live)",
         "error_definition": "actual - forecast (negative bias = forecast too high)",
     }
 
@@ -69,18 +85,33 @@ def forecast(date: Date = Query(...), cutoff: str = Query(P.DEFAULT_CUTOFF, patt
     d = selected(cutoff)
     d = d[d["delivery_date"] == date]
     if d.empty:
-        raise HTTPException(404, "no forecast available for that date and cutoff")
+        raise HTTPException(404, "no forecast was published before that cutoff for this date")
     d = d.merge(raw()[0], on="startTime", how="left").sort_values("startTime")
-    p90 = P.metrics(joined(cutoff)).get("abs_error_p90") or 0.0
-    d["lower"] = (d["forecast"] - p90).clip(lower=0)
-    d["upper"] = d["forecast"] + p90
-    pts = d[["startTime", "forecast", "actual", "publishTime", "horizon_h", "lower", "upper"]]
+    d["err"] = d["actual"] - d["forecast"]
+
+    b = P.walk_forward_bands(joined(cutoff)).get(date)
+    if b:
+        lo, hi, n_hist = b
+        d["lower"] = (d["forecast"] + lo).clip(lower=0)
+        d["upper"] = d["forecast"] + hi
+        band = {"available": True, "lo_err": round(lo, 1), "hi_err": round(hi, 1), "history_slots": n_hist,
+                "method": "5th and 95th percentile of actual - forecast, from delivery days up to D-2"}
+    else:
+        d["lower"] = float("nan")
+        d["upper"] = float("nan")
+        band = {"available": False,
+                "method": "needs at least 3 earlier delivery days (up to D-2) of history"}
+
+    pts = d[["startTime", "forecast", "actual", "err", "publishTime", "horizon_h", "lower", "upper"]]
     return {
         "date": str(date),
         "cutoff_local": cutoff,
+        "cutoff_timezone": "Europe/London",
         "cutoff_utc": P.cutoff_utc(date, cutoff).strftime(ISO),
         "publish_times_used": sorted(set(d["publishTime"].dt.strftime(ISO))),
-        "p90_abs_error": p90,
+        "hours_available": int(len(d)),
+        "hours_missing": int(24 - len(d)),
+        "band": band,
         "points": records(pts),
     }
 
@@ -91,6 +122,27 @@ def get_metrics(start: Optional[Date] = None, end: Optional[Date] = None,
     s, e = _range(start, end)
     m = P.filter_range(joined(cutoff), s, e)
     return {"cutoff": cutoff, "start": str(s), "end": str(e), "metrics": P.metrics(m)}
+
+
+@app.get("/api/band-coverage")
+def band_coverage(cutoff: str = Query(P.DEFAULT_CUTOFF, pattern=CUTOFF_RE)):
+    return P.band_coverage(joined(cutoff))
+
+
+@app.get("/api/data-quality")
+def data_quality(cutoff: str = Query(P.DEFAULT_CUTOFF, pattern=CUTOFF_RE)):
+    sel, m = selected(cutoff), joined(cutoff)
+    expected = 31 * 24
+    return {
+        **quality(),
+        "cutoff": cutoff,
+        "expected_hourly_slots": expected,
+        "hours_with_forecast": int(len(sel)),
+        "hours_missing_forecast": expected - int(len(sel)),
+        "pairs_used": int(len(m)),
+        "pairs_excluded_no_actual": int(len(sel)) - int(len(m)),
+        "snapshot": snapshot(),
+    }
 
 
 @app.get("/api/error-breakdown")

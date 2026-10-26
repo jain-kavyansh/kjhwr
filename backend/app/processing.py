@@ -1,7 +1,7 @@
 """Core logic: pick the latest forecast available at the D-1 cutoff,
 join with actuals, and compute error metrics. error = actual - forecast."""
 import os
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -107,3 +107,51 @@ def breakdown_by_horizon(fc, act, start=JAN_START, end=JAN_END, bin_h=6):
     out = _agg(m.groupby("bucket")).reset_index()
     out["label"] = out["bucket"].astype(str) + "-" + (out["bucket"] + bin_h).astype(str) + "h"
     return out
+
+
+# ---------- walk-forward uncertainty band, coverage and data quality ----------
+
+def walk_forward_bands(m, min_days=3, lo_q=0.05, hi_q=0.95):
+    """For delivery day D, 5th/95th percentile of the signed error (actual - forecast)
+    using only delivery days <= D-2 (day D-1 is not fully known at the cutoff)."""
+    out = {}
+    for d in sorted(m["delivery_date"].unique()):
+        hist = m[m["delivery_date"] <= d - timedelta(days=2)]
+        if hist["delivery_date"].nunique() >= min_days:
+            out[d] = (float(hist["err"].quantile(lo_q)), float(hist["err"].quantile(hi_q)), int(len(hist)))
+    return out
+
+
+def band_coverage(m):
+    """Share of actual values that fell inside the walk-forward band (nominal 90%)."""
+    bands = walk_forward_bands(m)
+    slots = inside = 0
+    for d, (lo, hi, _n) in bands.items():
+        day = m[m["delivery_date"] == d]
+        slots += len(day)
+        inside += int(((day["err"] >= lo) & (day["err"] <= hi)).sum())
+    return {
+        "nominal_pct": 90.0,
+        "days_with_band": len(bands),
+        "slots": int(slots),
+        "inside": int(inside),
+        "coverage_pct": round(inside / slots * 100, 1) if slots else None,
+        "min_history_days": 3,
+    }
+
+
+def quality_report(data_dir=DATA_DIR):
+    act = pd.read_csv(os.path.join(data_dir, "actuals_raw.csv"), parse_dates=["startTime"])
+    fc = pd.read_csv(os.path.join(data_dir, "forecasts_raw.csv"), parse_dates=["startTime", "publishTime"])
+    horizon = (fc["startTime"] - fc["publishTime"]).dt.total_seconds() / 3600
+    return {
+        "actual_rows": int(len(act)),
+        "actual_expected_half_hours": 1488,
+        "actual_missing_half_hours": 1488 - int(act["startTime"].nunique()),
+        "actual_duplicate_slots": int(act["startTime"].duplicated().sum()),
+        "actual_used_on_the_hour": int((act["startTime"].dt.minute == 0).sum()),
+        "forecast_rows": int(len(fc)),
+        "forecast_publications": int(fc["publishTime"].nunique()),
+        "forecast_duplicate_rows": int(fc.duplicated(["publishTime", "startTime"]).sum()),
+        "forecast_rows_dropped_target_not_after_publish": int((horizon <= 0).sum()),
+    }

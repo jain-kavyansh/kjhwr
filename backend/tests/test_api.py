@@ -32,3 +32,16 @@ def test_breakdowns():
 def test_bad_inputs_rejected():
     assert client.get("/api/forecast", params={"date": "2026-03-01"}).status_code == 400
     assert client.get("/api/metrics", params={"cutoff": "25:99"}).status_code == 422
+
+
+def test_band_coverage_endpoint():
+    body = client.get("/api/band-coverage").json()
+    assert body["days_with_band"] == 27
+    assert 0 <= body["coverage_pct"] <= 100
+
+
+def test_data_quality_endpoint():
+    body = client.get("/api/data-quality").json()
+    assert body["hours_with_forecast"] == 744
+    assert body["pairs_used"] == 744
+    assert body["actual_duplicate_slots"] == 0
