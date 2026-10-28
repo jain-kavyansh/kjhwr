@@ -60,6 +60,17 @@ def _range(start, end):
     return start or P.JAN_START, end or P.JAN_END
 
 
+@app.get("/")
+def root():
+    return {
+        "service": "Wind Forecast Evaluation API",
+        "mode": "historical evaluation (not live)",
+        "docs": "/docs",
+        "health": "/health",
+        "example": "/api/metrics",
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
